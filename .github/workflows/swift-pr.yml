@@ -1,0 +1,75 @@
+name: PR
+
+on:
+    pull_request:
+        branches: [develop]
+
+jobs:
+    tests:
+        name: Build/test on ${{ matrix.name }}
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - name: Linux
+                      os: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v7
+            - name: Get swift version
+              id: get_swift_version
+              run: |
+                    v=$(cat .swift-version)
+                    echo "swift_version=$v" >> $GITHUB_OUTPUT
+            - uses: swift-actions/setup-swift@v2
+              with:
+                swift-version: ${{ steps.get_swift_version.outputs.swift_version }}
+            - name: Verify swift version
+              run: |
+                    swift --version
+            - name: Build
+              run: |
+                    swift build -v
+            - name: Run tests
+              run: |
+                    swift test -v
+            - name: Export coverage
+              id: coverage
+              continue-on-error: true
+              run: |
+                    swift test --enable-code-coverage -v
+                    BIN_PATH="$(swift build --show-bin-path)"
+                    XCTEST_BIN=$(find "$BIN_PATH" -name "*.xctest" -type f | head -n1)
+                    if [ -z "$XCTEST_BIN" ]; then
+                      XCTEST_BIN=$(find "$BIN_PATH" -name "*.xctest" -type d | head -n1)/Contents/MacOS/*
+                    fi
+                    PROFDATA="$BIN_PATH/codecov/default.profdata"
+                    echo "xctest_bin=$XCTEST_BIN" >> "$GITHUB_OUTPUT"
+                    echo "profdata=$PROFDATA" >> "$GITHUB_OUTPUT"
+                    mkdir -p coverage
+                    llvm-cov export -format=lcov "$XCTEST_BIN" \
+                        -instr-profile="$PROFDATA" > coverage/coverage.lcov
+                    llvm-cov show "$XCTEST_BIN" -instr-profile="$PROFDATA" \
+                        -format=html -output-dir=coverage
+            - name: Coverage summary
+              if: steps.coverage.outcome == 'success'
+              continue-on-error: true
+              run: |
+                    echo "## Swift coverage" >> "$GITHUB_STEP_SUMMARY"
+                    echo '```' >> "$GITHUB_STEP_SUMMARY"
+                    llvm-cov report "${{ steps.coverage.outputs.xctest_bin }}" \
+                        -instr-profile="${{ steps.coverage.outputs.profdata }}" >> "$GITHUB_STEP_SUMMARY"
+                    echo '```' >> "$GITHUB_STEP_SUMMARY"
+            - name: Upload coverage artifact
+              if: steps.coverage.outcome == 'success'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: coverage-report
+                  path: coverage/
+            - name: Coverage threshold
+              if: steps.coverage.outcome == 'success'
+              continue-on-error: true
+              run: |
+                    read -r LF LH < <(awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{print lf, lh}' coverage/coverage.lcov)
+                    PCT=$(awk -v lf="$LF" -v lh="$LH" 'BEGIN { if (lf>0) printf "%.2f", (lh/lf)*100; else print "0.00" }')
+                    awk -v pct="$PCT" 'BEGIN { exit !(pct+0 >= 0) }'
