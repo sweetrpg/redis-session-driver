@@ -57,4 +57,18 @@ final class RedisSessionDriverTests: XCTestCase {
     try await driver.deleteSession(SessionID(string: "existing-session"), for: req)
     try await app.asyncShutdown()
   }
+
+  func testCreateSessionWithCustomTTLFailsOpen() async throws {
+    let app = try makeUnreachableApp()
+    let req = Request(application: app, on: app.eventLoopGroup.next())
+    // The TTL-setting `expire` call, like the initial `set`, must also fail open rather than
+    // surfacing a Redis outage as a request error.
+    let driver = ResilientRedisSessionDriver(ttl: 3600)
+    let data = SessionData()
+
+    let id = try await driver.createSession(data, for: req)
+
+    XCTAssertFalse(id.string.isEmpty)
+    try await app.asyncShutdown()
+  }
 }
