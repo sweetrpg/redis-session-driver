@@ -5,6 +5,11 @@ import PackageDescription
 
 let package = Package(
     name: "RedisSessionDriver",
+    platforms: [
+        // Vapor and RediStack require 10.15; without this SwiftPM defaults to 10.13
+        // and fails dependency resolution on macOS.
+        .macOS(.v10_15)
+    ],
     products: [
         // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
